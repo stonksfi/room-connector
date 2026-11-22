@@ -1,0 +1,13 @@
+#!/bin/sh
+# Forwards a Claude Code hook's JSON (stdin) to roomd and prints roomd's answer.
+# Always exits 0 and stays silent on stderr: a failing hook (exit 2 blocks a
+# prompt) must never get in the way of a session, whatever state roomd is in.
+ROOMD="${ROOM_HOME:-$HOME/.room}/bin/roomd"
+if [ ! -x "$ROOMD" ]; then
+  ROOMD="$(command -v roomd 2>/dev/null)"
+fi
+if [ -n "$ROOMD" ]; then
+  "$ROOMD" emit claude_code 2>/dev/null
+fi
+cat >/dev/null 2>&1
+exit 0
