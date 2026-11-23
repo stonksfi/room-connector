@@ -30,6 +30,7 @@ type hookInput struct {
 	Delta                string         `json:"delta"`
 	LastAssistantMessage string         `json:"last_assistant_message"`
 	StopHookActive       bool           `json:"stop_hook_active"`
+	NotificationType     string         `json:"notification_type"`
 }
 
 // stopBlock is the Stop hook answer that makes Claude continue with a message.
@@ -88,6 +89,19 @@ func (p *Provider) HandleHook(ctx context.Context, body []byte) ([]byte, error) 
 			ToolName:      in.ToolName,
 			Text:          summarizeTool(in.ToolName, in.ToolInput),
 		}, now)
+		p.onToolStart(s, in, now)
+	case "PostToolUse", "PostToolUseFailure":
+		p.onToolEnd(s, in, now)
+	case "PermissionRequest":
+		p.wait(s, fingerprint(in), in.ToolName, now)
+	case "Elicitation":
+		p.wait(s, "", "", now)
+	case "ElicitationResult":
+		p.resume(s, now)
+	case "Notification":
+		if needsPerson[in.NotificationType] {
+			p.wait(s, "", "", now)
+		}
 	case "MessageDisplay":
 		p.onDisplay(s, in, now)
 	case "Stop":
@@ -106,6 +120,8 @@ func (p *Provider) HandleHook(ctx context.Context, body []byte) ([]byte, error) 
 func (p *Provider) onPrompt(s *session, in hookInput, now time.Time) {
 	s.promptID = in.PromptID
 	s.stops = 0
+	s.changes = 0
+	s.tools = nil
 	s.assistantSent = false
 	s.stopped = false
 	ev := core.Event{
@@ -139,6 +155,8 @@ func (p *Provider) onDisplay(s *session, in hookInput, now time.Time) {
 	}
 	d, ok := s.drafts[in.MessageID]
 	if !ok {
+		// Claude is writing a reply it had not started: it is not waiting.
+		p.resume(s, now)
 		d = newDraft()
 		s.drafts[in.MessageID] = d
 	}
@@ -175,6 +193,7 @@ func (p *Provider) onStop(ctx context.Context, s *session, in hookInput, now tim
 			Text:          q.cmd.Text,
 			CommandID:     q.cmd.ID,
 		}, now)
+		p.resume(s, now) // the turn goes on with the message
 		return json.Marshal(stopBlock{
 			Decision: "block",
 			Reason:   "The person sent this message from the Room app on their phone. Treat it as their next prompt:\n\n" + q.cmd.Text,

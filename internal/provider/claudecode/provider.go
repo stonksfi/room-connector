@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -28,14 +29,17 @@ const (
 	// session to count as reachable by it.
 	pollFresh = 10 * time.Second
 	// untakenTimeout fails a message no in-session script picked up while the
-	// session slept (a busy session's Stop hook can still hand it over).
+	// session slept or waited on the person (a busy session's Stop hook can
+	// still hand it over).
 	untakenTimeout = 2 * time.Minute
 	// unconfirmedTimeout fails a message taken but never seen as a prompt,
-	// counted only while the session sleeps (a long turn delays it legitimately).
+	// counted only while the session sleeps or waits on the person (a long
+	// turn delays it legitimately).
 	unconfirmedTimeout = 2 * time.Minute
-	// closedRemembered bounds how many finished replies a session remembers,
-	// so late chunks of one are ignored rather than reported again.
-	closedRemembered = 32
+	// remembered bounds the ids a session keeps of each kind: its finished
+	// replies, so late chunks of one are ignored rather than reported again,
+	// and the tool calls its turn started.
+	remembered = 32
 )
 
 var (
@@ -66,26 +70,41 @@ type session struct {
 	// prompt: a reply whose chunks complete in between was already reported
 	// from the Stop's own text.
 	stopped bool
-	drafts  map[string]*draft
-	closed  []string // message ids already reported, newest last
-	inbox   []queued // waiting for the in-session script
-	handed  []queued // taken, waiting to be seen running
+	// changes counts the turn's state changes after its start, so each has
+	// an id of its own. tools are the tool calls the turn started, newest
+	// last (a question's with its fingerprint). waitTool is, while the
+	// session needs input, the fingerprint of the tool the person is asked
+	// about ("" when there is none).
+	changes  int
+	tools    []toolCall
+	waitTool string
+	drafts   map[string]*draft
+	closed   []string // message ids already reported, newest last
+	inbox    []queued // waiting for the in-session script
+	handed   []queued // taken, waiting to be seen running
+}
+
+// toolCall is one tool use a turn started; fingerprint is kept for a
+// question only.
+type toolCall struct {
+	id, fingerprint string
 }
 
 func (s *session) isClosed(messageID string) bool {
-	for _, id := range s.closed {
-		if id == messageID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.closed, messageID)
 }
 
 func (s *session) close(messageID string) {
-	s.closed = append(s.closed, messageID)
-	if len(s.closed) > closedRemembered {
-		s.closed = s.closed[len(s.closed)-closedRemembered:]
+	s.closed = remember(s.closed, messageID)
+}
+
+// remember appends v, keeping only the newest `remembered` entries.
+func remember[T any](list []T, v T) []T {
+	list = append(list, v)
+	if len(list) > remembered {
+		list = list[len(list)-remembered:]
 	}
+	return list
 }
 
 type Provider struct {
@@ -230,7 +249,7 @@ func (p *Provider) expire() {
 	}
 	now := p.now()
 	for _, s := range p.sessions {
-		if s.info.State != core.StateSleeping {
+		if s.info.State == core.StateWorking {
 			continue // a turn is running: its end (or Stop hook) still delivers
 		}
 		s.inbox = p.expireList(s.inbox, func(q queued) bool {

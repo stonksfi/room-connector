@@ -231,6 +231,18 @@ func TestToEventInput_Note(t *testing.T) {
 	assert.Nil(t, toEventInput(core.Event{Kind: core.KindUserMessage}).Label, "no label unless set")
 }
 
+func TestFlush_SendsNeedsInput(t *testing.T) {
+	u, room := newTestUplink(t, "rmd_test", &fakeProvider{name: "claude_code"})
+	u.UpsertSession(core.Session{Provider: "claude_code", ProviderSessionID: "s1", State: core.StateNeedsInput})
+	u.Emit(core.Event{Provider: "claude_code", ProviderSessionID: "s1", ClientEventID: "wait:p:1", Kind: core.KindStateChange, State: core.StateNeedsInput})
+	require.NoError(t, u.flush(context.Background()))
+
+	sess := room.calls("/api/v1/connector/sessions/sync")[0]["params"].(map[string]any)["sessions"].([]any)[0].(map[string]any)
+	assert.Equal(t, float64(3), sess["state"]) // NEEDS_INPUT
+	ev := room.calls("/api/v1/connector/events")[0]["params"].(map[string]any)["events"].([]any)[0].(map[string]any)
+	assert.Equal(t, float64(3), ev["state"])
+}
+
 func TestNextBatch_CapsBytes(t *testing.T) {
 	u, _ := newTestUplink(t, "rmd_test", &fakeProvider{name: "claude_code"})
 	text := strings.Repeat("x", core.MaxEventText-10)

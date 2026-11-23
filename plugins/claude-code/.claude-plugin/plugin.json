@@ -1,5 +1,5 @@
 {
   "name": "room",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Streams this Claude Code session to the Room app and lets you message it from your phone. Needs the roomd daemon (roomd install, roomd login)."
 }

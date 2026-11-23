@@ -634,6 +634,8 @@ func toState(s core.State) entities.SessionState {
 		return entities.SessionState_WORKING
 	case core.StateEnded:
 		return entities.SessionState_ENDED
+	case core.StateNeedsInput:
+		return entities.SessionState_NEEDS_INPUT
 	default:
 		return entities.SessionState_SLEEPING
 	}

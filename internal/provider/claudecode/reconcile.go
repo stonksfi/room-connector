@@ -18,9 +18,12 @@ type liveSession struct {
 	SessionID string `json:"sessionId"`
 	Cwd       string `json:"cwd"`
 	Name      string `json:"name"`
-	// Status is busy, waiting or idle.
-	Status    string `json:"status"`
-	StartedAt int64  `json:"startedAt"` // unix milliseconds
+	// Status is busy, waiting (on the person: a permission prompt, a
+	// question, an elicitation, a dialog) or idle.
+	Status string `json:"status"`
+	// WaitingFor says what a waiting session waits for ("permission prompt").
+	WaitingFor string `json:"waitingFor"`
+	StartedAt  int64  `json:"startedAt"` // unix milliseconds
 }
 
 // listWithCLI asks Claude Code for its live sessions. It falls back to the
@@ -77,10 +80,14 @@ func listRegistry() ([]liveSession, error) {
 }
 
 func stateOf(status string) core.State {
-	if status == "busy" {
+	switch status {
+	case "busy":
 		return core.StateWorking
+	case "waiting":
+		return core.StateNeedsInput
+	default:
+		return core.StateSleeping
 	}
-	return core.StateSleeping
 }
 
 // reconcile reports every live session, catching what hooks miss: sessions
@@ -110,8 +117,9 @@ func (p *Provider) reconcile(ctx context.Context) {
 			s.info.StartedAt = time.UnixMilli(l.StartedAt)
 		}
 		// Hooks are exact while fresh; `claude agents` catches what they miss.
-		if now.Sub(s.lastHookAt) > hookFresh {
-			s.info.State = stateOf(l.Status)
+		if st := stateOf(l.Status); now.Sub(s.lastHookAt) > hookFresh && st != s.info.State {
+			// A wait the hooks saw is over, or one they missed began.
+			s.info.State, s.waitTool = st, ""
 		}
 		snapshot = append(snapshot, s.info)
 	}

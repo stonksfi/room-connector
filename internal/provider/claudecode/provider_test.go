@@ -398,3 +398,265 @@ func TestStart_ReconcilesUntilCancelled(t *testing.T) {
 	cancel()
 	assert.NoError(t, <-done)
 }
+
+// stateChanges lists the state changes reported, as "id=state".
+func stateChanges(r *recorder) []string {
+	out := []string{}
+	for _, e := range r.events {
+		if e.Kind == core.KindStateChange {
+			out = append(out, e.ClientEventID+"="+string(e.State))
+		}
+	}
+	return out
+}
+
+var rmBuild = map[string]any{"command": "rm -rf build"}
+
+func TestWait_PermissionEndsAtThePermittedToolsPostToolUse(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t0", "tool_input": map[string]any{"file_path": "/a"}})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+
+	// A parallel call finishing is not the answer.
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Read", "tool_use_id": "t0", "tool_input": map[string]any{"file_path": "/a"}})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_NamesTheToolItAsksAbout(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t9", "tool_input": map[string]any{"file_path": "/a"}})
+	hook(t, p, map[string]any{"hook_event_name": "Elicitation", "mcp_server_name": "github"})
+
+	named := []string{}
+	for _, e := range r.events {
+		if e.Kind == core.KindStateChange {
+			named = append(named, string(e.State)+":"+e.ToolName)
+		}
+	}
+	// The wait names its tool; going back to work and an elicitation name none
+	assert.Equal(t, []string{"working:", "needs_input:Bash", "working:", "needs_input:"}, named)
+}
+
+func TestWait_DeniedToolEndsWhenClaudeMovesOn(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	// Denied: no hook. Claude goes on with another call.
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t2", "tool_input": map[string]any{"command": "ls build"}})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_LatePreToolUseOfTheWaitedToolDoesNotEndIt(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	// Both run in the background: the prompt's hook can overtake the call's.
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input"}, stateChanges(r))
+}
+
+func TestWait_QuestionEndsAtItsAnswer(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	question := map[string]any{"questions": []any{map[string]any{"question": "Which db?"}}}
+	answered := map[string]any{"questions": question["questions"], "answers": map[string]any{"Which db?": "Postgres"}}
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "set up the db"})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": question})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": question})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+	// The answer comes back in the call's input, so it is matched by its id.
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": answered})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_TheNewestPromptIsTheOneOpen(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	ls := map[string]any{"command": "ls build"}
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	// Granted; a parallel call's prompt opens before the first call ends.
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": ls})
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t2", "tool_input": ls})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_ElicitationEndsAtItsResult(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "deploy"})
+	hook(t, p, map[string]any{"hook_event_name": "Elicitation", "mcp_server_name": "deployer", "message": "Which region?"})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+	hook(t, p, map[string]any{"hook_event_name": "ElicitationResult", "mcp_server_name": "deployer", "action": "accept"})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_NewReplyEndsItAndLateChunksDoNot(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "MessageDisplay", "message_id": "m1", "index": 0, "delta": "Let me "})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "MessageDisplay", "message_id": "m1", "index": 1, "delta": "clean up.", "final": true})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State, "a late chunk of a reply begun before the prompt")
+	hook(t, p, map[string]any{"hook_event_name": "MessageDisplay", "message_id": "m2", "index": 0, "delta": "OK, I won't."})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestWait_NotificationOnlyWhenItNeedsThePerson(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "Notification", "notification_type": "idle_prompt"})
+	hook(t, p, map[string]any{"hook_event_name": "Notification", "notification_type": "auth_success"})
+	assert.Equal(t, core.StateWorking, p.sessions["s1"].info.State)
+
+	hook(t, p, map[string]any{"hook_event_name": "Notification", "notification_type": "permission_prompt"})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+	// The prompt's own hook arriving after its notification changes nothing.
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input"}, stateChanges(r))
+}
+
+func TestWait_StopWhileWaitingSleepsAndLateHooksAreIgnored(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	// Between turns nothing is waiting on the person.
+	hook(t, p, map[string]any{"hook_event_name": "Notification", "notification_type": "agent_needs_input"})
+	assert.Empty(t, stateChanges(r))
+
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "Stopped."})
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t2", "tool_input": map[string]any{}})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "sleep:p1:1=sleeping"}, stateChanges(r))
+}
+
+func TestWait_ADialogBetweenTurnsIsNotEndedByALateHook(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "Done."})
+	p.listLive = func(context.Context) ([]liveSession, error) {
+		return []liveSession{{SessionID: "s1", Status: "waiting", WaitingFor: "dialog open"}}, nil
+	}
+	c.advance(hookFresh + time.Second)
+	p.reconcile(context.Background())
+	require.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t9", "tool_input": map[string]any{}})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State, "a late hook of the finished turn")
+	assert.Equal(t, []string{"work:p1=working", "sleep:p1:1=sleeping"}, stateChanges(r))
+}
+
+func TestWait_EveryStateChangeOfATurnHasItsOwnID(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	for _, prompt := range []string{"p1", "p2"} {
+		hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": prompt, "prompt": "go"})
+		for i, tool := range []string{"a", "b", "c"} {
+			input := map[string]any{"command": tool}
+			id := prompt + tool
+			hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": id, "tool_input": input})
+			hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": input})
+			if i == 1 {
+				hook(t, p, map[string]any{"hook_event_name": "Elicitation"})
+				hook(t, p, map[string]any{"hook_event_name": "ElicitationResult"})
+				continue
+			}
+			hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": id, "tool_input": input})
+		}
+		hook(t, p, map[string]any{"hook_event_name": "Stop"})
+	}
+	changes := stateChanges(r)
+	require.Len(t, changes, 2*(2+3*2))
+	assert.Contains(t, changes, "wait:p2:1=needs_input", "numbered per turn")
+	ids := map[string]bool{}
+	for _, c := range changes {
+		id, _, _ := strings.Cut(c, "=")
+		assert.False(t, ids[id], "repeated id %s", id)
+		ids[id] = true
+	}
+}
+
+func TestWait_StopThatHandsOverAMessageGoesOnWorking(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+	hook(t, p, map[string]any{"hook_event_name": "Notification", "notification_type": "agent_needs_input"})
+	require.NoError(t, p.Deliver(context.Background(), "s1", core.Command{ID: 5, Text: "also update docs"}))
+	c.advance(pollFresh + time.Second)
+	require.NotNil(t, hook(t, p, map[string]any{"hook_event_name": "Stop"}))
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
+func TestReconcile_WaitingIsNeedsInputWhenHooksAreStale(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+	p.listLive = func(context.Context) ([]liveSession, error) {
+		return []liveSession{{SessionID: "s1", Status: "waiting", WaitingFor: "permission prompt"}}, nil
+	}
+	c.advance(hookFresh + time.Second)
+	p.reconcile(context.Background())
+	assert.Equal(t, core.StateNeedsInput, r.snapshots[0][0].State, "a wait the hooks missed")
+
+	// Claude moves on, and its first new call says so.
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_use_id": "t1", "tool_input": map[string]any{}})
+	assert.Equal(t, []string{"work:p1=working", "work:p1:1=working"}, stateChanges(r))
+}
+
+func TestReconcile_CorrectsAWaitThatEndedWithoutAHook(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	p.listLive = func(context.Context) ([]liveSession, error) {
+		return []liveSession{{SessionID: "s1", Status: "busy"}}, nil // granted; the tool runs long
+	}
+	c.advance(hookFresh + time.Second)
+	p.reconcile(context.Background())
+	assert.Equal(t, core.StateWorking, r.snapshots[0][0].State)
+
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input"}, stateChanges(r), "already working: nothing to report")
+}
+
+func TestReconcile_AWaitOnlyItSawIsNotEndedByAnEarlierTool(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	status := "busy" // granted; the tool runs long
+	p.listLive = func(context.Context) ([]liveSession, error) {
+		return []liveSession{{SessionID: "s1", Status: status, WaitingFor: "dialog open"}}, nil
+	}
+	c.advance(hookFresh + time.Second)
+	p.reconcile(context.Background())
+	status = "waiting" // and meanwhile a dialog opens
+	p.reconcile(context.Background())
+	require.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State)
+
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "t1", "tool_input": rmBuild})
+	assert.Equal(t, core.StateNeedsInput, p.sessions["s1"].info.State, "the tool finishing does not answer the dialog")
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input"}, stateChanges(r))
+}
+
+func TestStateOf(t *testing.T) {
+	assert.Equal(t, core.StateWorking, stateOf("busy"))
+	assert.Equal(t, core.StateNeedsInput, stateOf("waiting"))
+	assert.Equal(t, core.StateSleeping, stateOf("idle"))
+	assert.Equal(t, core.StateSleeping, stateOf(""))
+}
+
+func TestExpire_RunsWhileNeedsInput(t *testing.T) {
+	p, r, c := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p", "prompt": "go"})
+	require.NoError(t, p.Deliver(context.Background(), "s1", core.Command{ID: 1, Text: "a"}))
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	c.advance(untakenTimeout + time.Second)
+	p.expire()
+	assert.ErrorIs(t, r.settled[1], errUntaken)
+}

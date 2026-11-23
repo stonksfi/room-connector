@@ -76,7 +76,7 @@ iPhone ◀═══ H.264 video + "input" data channel (WebRTC, P2P or TURN) ═
 ### Adding an Agent (e.g. Codex)
 
 1. Add `internal/provider/<agent>/` implementing `core.Provider` (and `HookReceiver` / `InboxServer` if its integration calls the local socket). Pick a stable `Name()`: it is stored by room-be as the session's provider.
-2. Map the agent's lifecycle onto `core.State` (working, sleeping, ended) and its conversation onto the five event kinds: the person's message, the agent's reply, a tool call, a state change, and a note (something the agent's harness handed it in the person's turn, with a `Label` the app shows).
+2. Map the agent's lifecycle onto `core.State` (working, needs input, sleeping, ended) and its conversation onto the five event kinds: the person's message, the agent's reply, a tool call, a state change, and a note (something the agent's harness handed it in the person's turn, with a `Label` the app shows).
 3. Implement `Deliver` with whatever in-session mechanism the agent offers, and settle each command through the sink when it lands or fails.
 4. Add it to `daemon.Providers()`, and its plugin, if it has one, under `plugins/` with install steps in `cmd/roomd/install.go`.
 
@@ -84,15 +84,16 @@ room-be and the app need no change: providers are just strings to them.
 
 ### Claude Code specifics
 
-- Hooks (`plugins/claude-code/hooks/hooks.json`) call `bin/room-emit`, which runs `~/.room/bin/roomd emit claude_code`. SessionStart, UserPromptSubmit, Stop and SessionEnd are synchronous (order and Stop's answer matter); PreToolUse, MessageDisplay and StopFailure run in the background, so MessageDisplay chunks are reassembled by `index`.
+- Hooks (`plugins/claude-code/hooks/hooks.json`) call `bin/room-emit`, which runs `~/.room/bin/roomd emit claude_code`. SessionStart, UserPromptSubmit, Stop and SessionEnd are synchronous (order and Stop's answer matter); PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Elicitation, ElicitationResult, MessageDisplay and StopFailure run in the background (never delaying a prompt, never answered), so MessageDisplay chunks are reassembled by `index` and any of them can arrive late.
+- Needs input (`waiting.go`, whose header has the rules): a running turn waits from a PermissionRequest, an Elicitation, a person-facing Notification or an AskUserQuestion/ExitPlanMode PreToolUse, and works again at the asked tool's PostToolUse, an ElicitationResult, or Claude moving on (a tool call or reply it had not started). A denied prompt fires no hook, so moving on is what ends it. Ids: `wait:<prompt>:<n>`, `work:<prompt>:<n>`. A wait's event carries the asked tool's name (`ToolName`, empty for an elicitation or dialog), so the app can say what the person is asked for.
 - The in-session script (`hooks/register.ts`, a Claude Code mod) polls the inbox every 1.5s over the socket and submits each message with `$.prompt.submit({ text, asUser: true })`, which waits for the session to be idle and wakes an idle one. A message counts as delivered when its `UserPromptSubmit` arrives.
 - If `prompt.submit` refuses a message (`{ drop }`) or throws, the script returns it through `inbox/return` and it fails with that reason. Polls never overlap and each request times out in 3s.
 - When no script polls (mods turned off), the Stop hook (never StopFailure, whose background answer is ignored) answers `{"decision":"block","reason":...}` with the waiting message. It is reported as the person's message then, and settled delivered when the next Stop arrives with `stop_hook_active`, which proves Claude continued.
 - Replies: a reply still streaming at Stop is reported with the Stop's full `last_assistant_message` and its id closed, so trailing chunks are ignored; chunks completing after a Stop and before the next prompt are late copies of the reply already reported. A Stop with no reply in progress reports `stop:<prompt>:<n>`.
-- Untaken or unconfirmed messages only expire (2 min) while the session sleeps; a running turn can still deliver them.
+- Untaken or unconfirmed messages only expire (2 min) while the session sleeps or needs input; a running turn can still deliver them.
 - Prompts the harness writes fire `UserPromptSubmit` too, the whole prompt wrapped in one tag: a subagent's report (`<agent-message>`), a background task finishing (`<task-notification>`). `readHarness` (`harness.go`, one `harnessTags` entry per tag) reports them as `KindNote` with a label and the body without the tag, a report's preamble or the harness's indent; they still start a turn. A prompt that delivers an app message is matched first and stays the person's; any other tag is the person's too.
 - `bin/room-emit` always exits 0 and discards roomd's stderr: exit 2 from a hook blocks the person's prompt.
-- `claude agents --json` (every 15s) catches what hooks miss: sessions started before the plugin, Esc-interrupted turns, crashes. Hook state wins while it is fresh.
+- `claude agents --json` (every 15s) catches what hooks miss: sessions started before the plugin, Esc-interrupted turns, crashes, and waits no hook saw begin or end (`busy` is working, `waiting` needs input, anything else sleeping). Hook state wins while it is fresh.
 - Mod API types: grep the `claude-code.d.ts` the plugin-authoring skill lays down; that API changes between Claude Code releases, so re-run `make validate-plugin` after upgrading Claude Code.
 
 ### Screen view

@@ -13,9 +13,13 @@ import (
 type State string
 
 const (
+	// StateSleeping is idle until the next message: the turn finished.
 	StateSleeping State = "sleeping"
 	StateWorking  State = "working"
 	StateEnded    State = "ended"
+	// StateNeedsInput is blocked on the person: a permission prompt, a
+	// question, a dialog.
+	StateNeedsInput State = "needs_input"
 )
 
 // EventKind is the kind of one conversation row.
