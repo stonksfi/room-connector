@@ -215,12 +215,20 @@ func TestFlush_DropsWhatRoomPermanentlyRefuses(t *testing.T) {
 
 func TestToEventInput_HoldsEveryProviderToRoomsLimits(t *testing.T) {
 	big := strings.Repeat("x", core.MaxEventText+10)
-	in := toEventInput(core.Event{Text: big, ToolName: strings.Repeat("t", 500)})
+	in := toEventInput(core.Event{Text: big, ToolName: strings.Repeat("t", 500), Label: strings.Repeat("l", 500)})
 	assert.LessOrEqual(t, len(in.GetText()), core.MaxEventText)
 	assert.LessOrEqual(t, len(in.GetToolName()), core.MaxToolName)
+	assert.LessOrEqual(t, len(in.GetLabel()), core.MaxLabel)
 	up := toUpsert(core.Session{Title: strings.Repeat("t", 1000), Cwd: strings.Repeat("c", 5000)})
 	assert.LessOrEqual(t, len(up.GetTitle()), core.MaxTitle)
 	assert.LessOrEqual(t, len(up.GetCwd()), core.MaxCwd)
+}
+
+func TestToEventInput_Note(t *testing.T) {
+	in := toEventInput(core.Event{Kind: core.KindNote, Label: "Subagent report", Text: "## Review"})
+	assert.Equal(t, entities.SessionEventKind_NOTE, in.GetKind())
+	assert.Equal(t, "Subagent report", in.GetLabel())
+	assert.Nil(t, toEventInput(core.Event{Kind: core.KindUserMessage}).Label, "no label unless set")
 }
 
 func TestNextBatch_CapsBytes(t *testing.T) {

@@ -122,6 +122,13 @@ func (p *Provider) onPrompt(s *session, in hookInput, now time.Time) {
 			break
 		}
 	}
+	// Any other prompt the harness wrote (a subagent's report) is a note; it
+	// still starts a turn, since the agent goes on to act on it.
+	if ev.CommandID == 0 {
+		if label, text, ok := readHarness(in.Prompt); ok {
+			ev.Kind, ev.Label, ev.Text = core.KindNote, label, text
+		}
+	}
 	p.emit(s, ev, now)
 	p.setState(s, core.StateWorking, "work:"+in.PromptID, now)
 }

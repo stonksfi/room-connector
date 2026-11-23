@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -104,6 +105,17 @@ func TestHooks_TurnBecomesConversationAndStates(t *testing.T) {
 	}
 }
 
+func TestHooks_HarnessPromptIsANoteThatStartsATurn(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": handback})
+
+	assert.Equal(t, []core.EventKind{core.KindNote, core.KindStateChange}, r.kinds())
+	assert.Equal(t, "Subagent report", r.events[0].Label)
+	assert.True(t, strings.HasPrefix(r.events[0].Text, "## Code review"), r.events[0].Text)
+	assert.Equal(t, "prompt:p1", r.events[0].ClientEventID)
+	assert.Equal(t, core.StateWorking, r.events[1].State, "the agent goes on to act on it")
+}
+
 func TestHooks_StopReportsReplyWhenNoChunksArrived(t *testing.T) {
 	p, r, _ := newTestProvider(t)
 	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "hi"})
@@ -188,6 +200,17 @@ func TestInbox_MessageIsDeliveredWhenItShowsUpAsPrompt(t *testing.T) {
 	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p9", "prompt": "run the tests\n"})
 	assert.NoError(t, r.settled[3])
 	assert.Equal(t, int64(3), r.events[0].CommandID)
+}
+
+func TestInbox_AppMessageThatLooksLikeAHarnessTagStaysThePersons(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	text := "<agent-message>hi</agent-message>"
+	require.NoError(t, p.Deliver(context.Background(), "s1", core.Command{ID: 4, Text: text}))
+	p.TakeInbox("s1")
+
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": text})
+	assert.Equal(t, core.KindUserMessage, r.events[0].Kind)
+	assert.Equal(t, int64(4), r.events[0].CommandID)
 }
 
 func TestStopFallback_HandsMessageWhenNoScriptPolls(t *testing.T) {

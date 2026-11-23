@@ -76,7 +76,7 @@ iPhone ◀═══ H.264 video + "input" data channel (WebRTC, P2P or TURN) ═
 ### Adding an Agent (e.g. Codex)
 
 1. Add `internal/provider/<agent>/` implementing `core.Provider` (and `HookReceiver` / `InboxServer` if its integration calls the local socket). Pick a stable `Name()`: it is stored by room-be as the session's provider.
-2. Map the agent's lifecycle onto `core.State` (working, sleeping, ended) and its conversation onto the four event kinds.
+2. Map the agent's lifecycle onto `core.State` (working, sleeping, ended) and its conversation onto the five event kinds: the person's message, the agent's reply, a tool call, a state change, and a note (something the agent's harness handed it in the person's turn, with a `Label` the app shows).
 3. Implement `Deliver` with whatever in-session mechanism the agent offers, and settle each command through the sink when it lands or fails.
 4. Add it to `daemon.Providers()`, and its plugin, if it has one, under `plugins/` with install steps in `cmd/roomd/install.go`.
 
@@ -90,6 +90,7 @@ room-be and the app need no change: providers are just strings to them.
 - When no script polls (mods turned off), the Stop hook (never StopFailure, whose background answer is ignored) answers `{"decision":"block","reason":...}` with the waiting message. It is reported as the person's message then, and settled delivered when the next Stop arrives with `stop_hook_active`, which proves Claude continued.
 - Replies: a reply still streaming at Stop is reported with the Stop's full `last_assistant_message` and its id closed, so trailing chunks are ignored; chunks completing after a Stop and before the next prompt are late copies of the reply already reported. A Stop with no reply in progress reports `stop:<prompt>:<n>`.
 - Untaken or unconfirmed messages only expire (2 min) while the session sleeps; a running turn can still deliver them.
+- Prompts the harness writes fire `UserPromptSubmit` too, the whole prompt wrapped in one tag: a subagent's report (`<agent-message>`), a background task finishing (`<task-notification>`). `readHarness` (`harness.go`, one `harnessTags` entry per tag) reports them as `KindNote` with a label and the body without the tag, a report's preamble or the harness's indent; they still start a turn. A prompt that delivers an app message is matched first and stays the person's; any other tag is the person's too.
 - `bin/room-emit` always exits 0 and discards roomd's stderr: exit 2 from a hook blocks the person's prompt.
 - `claude agents --json` (every 15s) catches what hooks miss: sessions started before the plugin, Esc-interrupted turns, crashes. Hook state wins while it is fresh.
 - Mod API types: grep the `claude-code.d.ts` the plugin-authoring skill lays down; that API changes between Claude Code releases, so re-run `make validate-plugin` after upgrading Claude Code.

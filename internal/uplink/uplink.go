@@ -610,6 +610,10 @@ func toEventInput(e core.Event) *entities.SessionEventInput {
 		tool := core.Truncate(e.ToolName, core.MaxToolName)
 		out.ToolName = &tool
 	}
+	if e.Label != "" {
+		label := core.Truncate(e.Label, core.MaxLabel)
+		out.Label = &label
+	}
 	if e.Kind == core.KindStateChange {
 		state := toState(e.State)
 		out.State = &state
@@ -643,6 +647,8 @@ func toKind(k core.EventKind) entities.SessionEventKind {
 		return entities.SessionEventKind_TOOL_ACTIVITY
 	case core.KindStateChange:
 		return entities.SessionEventKind_STATE_CHANGE
+	case core.KindNote:
+		return entities.SessionEventKind_NOTE
 	default:
 		return entities.SessionEventKind_USER_MESSAGE
 	}

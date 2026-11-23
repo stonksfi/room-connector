@@ -26,6 +26,10 @@ const (
 	KindAssistantMessage EventKind = "assistant_message"
 	KindToolActivity     EventKind = "tool_activity"
 	KindStateChange      EventKind = "state_change"
+	// KindNote is something the agent's harness handed it in the person's
+	// turn (a subagent's report, a background task finishing): read by the
+	// agent, not said by the person.
+	KindNote EventKind = "note"
 )
 
 // Session is what a provider knows about one of its sessions.
@@ -48,6 +52,8 @@ type Event struct {
 	Kind          EventKind
 	Text          string
 	ToolName      string
+	// Label names a KindNote as the app shows it ("Subagent report").
+	Label string
 	// State is set for KindStateChange only.
 	State State
 	// CommandID links a user message to the Room command it delivered; 0 if none.
@@ -114,6 +120,7 @@ const (
 	MaxTitle     = 200
 	MaxCwd       = 4096
 	MaxToolName  = 128
+	MaxLabel     = 128
 )
 
 // Truncate cuts s to at most max bytes on a character boundary, marking the cut.
