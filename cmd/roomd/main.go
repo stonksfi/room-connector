@@ -10,6 +10,7 @@
 //	roomd uninstall          remove the daemon and the plugin
 //	roomd run                run in the foreground (what launchd runs)
 //	roomd emit <provider>    forward a hook's JSON from stdin (used by the plugin)
+//	roomd version            print roomd's version
 package main
 
 import (
@@ -31,7 +32,11 @@ const usage = `roomd: the Room connector
   roomd uninstall [--purge] remove the daemon and the plugin
   roomd run                 run in the foreground
   roomd emit <provider>     forward a hook's JSON from stdin (used by plugins)
+  roomd version             print roomd's version
 `
+
+// version is set by release builds with -ldflags "-X main.version=…".
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -60,6 +65,8 @@ func main() {
 		err = install(ctx)
 	case "uninstall":
 		err = uninstall(ctx, args)
+	case "version", "--version":
+		fmt.Println("roomd", version)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

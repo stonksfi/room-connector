@@ -1,0 +1,28 @@
+{
+  "name": "@stonksfi/roomd",
+  "version": "0.0.0",
+  "description": "roomd, the Room connector: streams the Claude Code sessions on this Mac to the Room app and takes messages from it.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stonksfi/room-connector.git",
+    "directory": "npm/roomd"
+  },
+  "homepage": "https://github.com/stonksfi/room-connector#readme",
+  "bin": {
+    "roomd": "bin/roomd.js"
+  },
+  "files": [
+    "bin/roomd.js"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@stonksfi/roomd-darwin-arm64": "0.0.0",
+    "@stonksfi/roomd-darwin-x64": "0.0.0"
+  }
+}

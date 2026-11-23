@@ -46,11 +46,17 @@ func install(ctx context.Context) error {
 	if err := installBinaries(ctx); err != nil {
 		return fmt.Errorf("install binary: %w", err)
 	}
-	fmt.Println("✓ roomd installed at", binPath())
+	fmt.Printf("✓ roomd %s installed at %s\n", version, binPath())
 
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if cfg.DeviceID == 0 {
+		// The daemon being installed is this build: until a login pins the
+		// server its token belongs to, use this build's server, and save it
+		// so that `roomd login` from any build links to the same one.
+		cfg.BaseURL = config.DefaultBaseURL
 	}
 	claude, err := exec.LookPath("claude")
 	if err != nil {
@@ -78,9 +84,28 @@ func install(ctx context.Context) error {
 	}
 
 	if _, err := store.LoadToken(); err != nil {
-		fmt.Println("\nNext: run `roomd login` to link this machine to your Room account.")
+		fmt.Print(loginHint())
 	}
 	return nil
+}
+
+// roomdCommand is how to run roomd from a shell: plain `roomd` when one is on
+// PATH (an npm global install puts it there), else the installed copy.
+func roomdCommand() string {
+	if _, err := exec.LookPath("roomd"); err == nil {
+		return "roomd"
+	}
+	return binPath()
+}
+
+// loginHint is install's last word to a machine that is not linked yet.
+func loginHint() string {
+	roomd := roomdCommand()
+	hint := fmt.Sprintf("\nNext: run `%s login` to link this machine to your Room account.\n", roomd)
+	if roomd != "roomd" {
+		hint += fmt.Sprintf("  (to type just `roomd`: export PATH=\"%s:$PATH\")\n", filepath.Dir(binPath()))
+	}
+	return hint
 }
 
 // installBinaries installs roomd and, on macOS, roomd-screen from beside it,
@@ -112,13 +137,22 @@ func installBinaries(ctx context.Context) error {
 	if err := installFile(ctx, screenSrc, screenBinPath(), "com.stonksfi.roomd-screen", identity); err != nil {
 		return fmt.Errorf("roomd-screen: %w", err)
 	}
-	if identity != "" {
+	switch {
+	case identity != "":
 		fmt.Printf("✓ roomd and roomd-screen signed by %q: screen permissions survive reinstalls\n", identity)
-	} else {
+	case adhocSigned(ctx, binPath()):
 		fmt.Printf("! roomd is ad-hoc signed, so macOS forgets its screen permissions on every install:\n"+
-			"  run `roomd screen setup` again after installing (or set %s to a signing identity)\n", signIdentityEnv)
+			"  run `%s screen setup` again after installing (or set %s to a signing identity)\n", roomdCommand(), signIdentityEnv)
 	}
 	return nil
+}
+
+// adhocSigned is whether path has no signature or only an ad-hoc one, which
+// changes with every build, so macOS forgets what was granted to it. A
+// release signed with an identity keeps its signature through installFile.
+func adhocSigned(ctx context.Context, path string) bool {
+	out, err := exec.CommandContext(ctx, "codesign", "-dv", path).CombinedOutput()
+	return err != nil || strings.Contains(string(out), "Signature=adhoc")
 }
 
 // installFile copies src to dst through a file beside it, signed with

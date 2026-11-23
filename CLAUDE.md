@@ -17,6 +17,8 @@ make update-idl       # regenerate internal/model from ../http_idl/room (hz mode
 make install          # build, then install the launchd agent and the Claude Code plugin
                       # (ROOM_CODESIGN_IDENTITY=<identity> signs both binaries; see Screen view)
 make validate-plugin  # `claude plugin validate plugins/claude-code`
+make npm-pack V=0.1.0     # release build of both Mac archs into the npm packages, packed into dist/
+make npm-publish V=0.1.0  # ...and publish them (`npm login` first)
 
 ROOM_HOME=/tmp/rh ROOM_TOKEN_FILE=/tmp/rh/token ROOM_SOCKET=/tmp/rh.sock ./bin/roomd run
 ./bin/roomd-screen bench   # capture + encode 5s of the screen; fps, bitrate, encode latency
@@ -37,7 +39,7 @@ room-be ◀─AnswerScreenView{sdp | unavailable}── Uplink ◀────�
 iPhone ◀═══ H.264 video + "input" data channel (WebRTC, P2P or TURN) ═══▶ roomd-screen: SCK → VideoToolbox → pion; input → CGEventPost
 ```
 
-- `cmd/roomd/` - the CLI: run, login, logout, status, emit, install, uninstall, screen setup|stop.
+- `cmd/roomd/` - the CLI: run, login, logout, status, emit, install, uninstall, screen setup|stop, version.
 - `cmd/roomd-screen/` - the screen view helper, a second binary: `session` (what roomd runs), `setup`, `bench`. Its `init` locks the main goroutine to the main thread, which runs the app's event loop.
 - `internal/core/` - **the provider-neutral contract**: `Session`, `Event`, `Command`, `Provider`, `Sink`, plus the optional `HookReceiver` and `InboxServer` a provider implements when its agent reports over the local socket; and the screen view's `ScreenOffer`, `ScreenHost` (`Answer`, `Stop`), `ScreenPermissions` and `ErrNeeds*` (`screen.go`). Nothing in core names an agent.
 - `internal/provider/<agent>/` - one package per agent. `claudecode` maps Claude Code's hook JSON to core events, reassembles streamed replies, reconciles against `claude agents --json`, and queues app messages for its in-session script.
@@ -50,6 +52,14 @@ iPhone ◀═══ H.264 video + "input" data channel (WebRTC, P2P or TURN) ═
 - `internal/daemon/` - wires it together; `Providers()` lists the agents this build supports.
 - `internal/model/` - generated from the shared IDL (DO NOT EDIT; `make update-idl`).
 - `plugins/<agent>/` - the plugin each agent loads, embedded into the binary and written out by `roomd install`.
+- `npm/` - the npm packages: `roomd` (`@stonksfi/roomd`, a Node shim that runs the platform binary) and `roomd-darwin-{arm64,x64}` (the binaries, built in by `scripts/npm-release.sh`, which stages them in `dist/npm/`). `roomd install` copies the binary out to `~/.room/bin`, so launchd and the hooks never run Node.
+
+### Releases
+
+- `config.DefaultBaseURL` (localhost) and `main.version` (`dev`) are set at link time by `scripts/npm-release.sh`: production room-be and the release version. Source builds keep the defaults.
+- The daemon reads `base_url` from `config.json` once, at start, and `roomd login` defaults `--server` to it. `roomd install` on an unlinked machine saves the installed build's `DefaultBaseURL` there (a release over a dev build moves it to production); once linked, it keeps the server the token was issued by.
+- `roomd install` warns about re-running `roomd screen setup` only when the installed `roomd` is unsigned or ad hoc (`codesign -dv`), so a release signed with `ROOM_CODESIGN_IDENTITY` installs quietly.
+- `roomd` is built with `CGO_ENABLED=0` for each arch; `roomd-screen` with cgo (go passes clang the matching `-arch`). The platform packages are published before the main one, which pins them to its exact version.
 
 ### Architecture Rules
 

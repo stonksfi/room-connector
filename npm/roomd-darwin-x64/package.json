@@ -1,0 +1,21 @@
+{
+  "name": "@stonksfi/roomd-darwin-x64",
+  "version": "0.0.0",
+  "description": "The macOS x64 binaries of @stonksfi/roomd. Install @stonksfi/roomd instead.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stonksfi/room-connector.git",
+    "directory": "npm/roomd-darwin-x64"
+  },
+  "files": [
+    "bin/"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "preferUnplugged": true
+}

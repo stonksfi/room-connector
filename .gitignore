@@ -4,3 +4,4 @@
 coverage.out
 /plugins/claude-code/.claude-plugin/types
 /plugins/claude-code/tsconfig.json
+/dist

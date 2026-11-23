@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 )
 
-// DefaultBaseURL is used until `roomd login --server` names another.
-const DefaultBaseURL = "http://localhost:8888"
+// DefaultBaseURL is used until `roomd login --server` names another. Release
+// builds set it to the deployed room-be with
+// -ldflags "-X github.com/stonksfi/room-connector/internal/config.DefaultBaseURL=…".
+var DefaultBaseURL = "http://localhost:8888"
 
 // Config is roomd's persisted state. The device token is not here: it lives
 // in the credential store.

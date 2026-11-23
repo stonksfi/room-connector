@@ -1,4 +1,4 @@
-.PHONY: build test update-idl install validate-plugin
+.PHONY: build test update-idl install validate-plugin npm-pack npm-publish
 IDL_PATH=$(shell pwd)/../http_idl
 IDL=$(IDL_PATH)/room/room.proto
 
@@ -7,9 +7,10 @@ build:
 	go build -o bin/roomd ./cmd/roomd
 	go build -o bin/roomd-screen ./cmd/roomd-screen
 
-# Run the offline test suite.
+# Run the offline test suite (and the npm shim's).
 test:
 	go test ./...
+	node --test npm/roomd/test/
 
 # Regenerate the room-be API models from the shared IDL (http_idl/room).
 update-idl:
@@ -24,3 +25,12 @@ install: build
 # Check the Claude Code plugin the way Claude Code loads it.
 validate-plugin:
 	claude plugin validate plugins/claude-code
+
+# Build the npm packages (npm/) for both Mac architectures and pack them into
+# dist/ to inspect or install locally: make npm-pack V=0.1.0
+npm-pack:
+	scripts/npm-release.sh $(V)
+
+# Build and publish them to npm (needs `npm login`): make npm-publish V=0.1.0
+npm-publish:
+	scripts/npm-release.sh $(V) --publish
