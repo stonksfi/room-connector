@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,27 @@ type hookInput struct {
 	LastAssistantMessage string         `json:"last_assistant_message"`
 	StopHookActive       bool           `json:"stop_hook_active"`
 	NotificationType     string         `json:"notification_type"`
+	// BackgroundTasks (Stop) is the session's work still in flight.
+	BackgroundTasks []backgroundTask `json:"background_tasks"`
+}
+
+// backgroundTask is one entry of a Stop's background_tasks; Type is Claude
+// Code's label for it ("subagent", "workflow", "shell", "monitor", ...).
+type backgroundTask struct {
+	Type string `json:"type"`
+}
+
+// reportsBack are the background tasks whose result comes back as the
+// session's next prompt, so a turn that ends with one running is not done:
+// Claude Code counts the session busy too. A shell or monitor can run for
+// good (a dev server), and so can a teammate (idle between its turns) or a
+// cloud session, so those are left out; when one of them does keep the
+// session busy, reconcile follows `claude agents` once the hooks go quiet.
+var reportsBack = map[string]bool{"subagent": true, "workflow": true}
+
+// awaitsAgents reports whether a Stop left agents running that will report back.
+func awaitsAgents(tasks []backgroundTask) bool {
+	return slices.ContainsFunc(tasks, func(t backgroundTask) bool { return reportsBack[t.Type] })
 }
 
 // stopBlock is the Stop hook answer that makes Claude continue with a message.
@@ -211,6 +233,12 @@ func (p *Provider) onStop(ctx context.Context, s *session, in hookInput, now tim
 		})
 	}
 	s.stopped = true
+	if awaitsAgents(in.BackgroundTasks) {
+		if s.info.State != core.StateWorking {
+			p.changeState(s, core.StateWorking, "", now)
+		}
+		return nil, nil
+	}
 	p.setState(s, core.StateSleeping, "sleep:"+s.promptID+":"+strconv.Itoa(s.stops), now)
 	return nil, nil
 }

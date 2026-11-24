@@ -271,7 +271,7 @@ func (p *Provider) expire() {
 	for _, s := range p.sessions {
 		p.expireAnswers(s, now)
 		if s.info.State == core.StateWorking {
-			continue // a turn is running: its end (or Stop hook) still delivers
+			continue // a turn is running, or its agents are: a Stop still delivers
 		}
 		s.inbox = p.expireList(s.inbox, func(q queued) bool {
 			return now.Sub(q.at) > untakenTimeout && now.Sub(s.lastPollAt) > pollFresh

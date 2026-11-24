@@ -648,6 +648,44 @@ func TestWait_StopThatHandsOverAMessageGoesOnWorking(t *testing.T) {
 	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
 }
 
+func tasksRunning(types ...string) []any {
+	tasks := make([]any, len(types))
+	for i, typ := range types {
+		tasks[i] = map[string]any{"type": typ}
+	}
+	return tasks
+}
+
+func TestStop_AgentsStillRunningKeepTheSessionWorking(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "review the diff"})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "Two reviewers are running.",
+		"background_tasks": tasksRunning("subagent", "shell")})
+	assert.Equal(t, []string{"work:p1=working"}, stateChanges(r), "not done while its agents run")
+	assert.Equal(t, core.StateWorking, p.sessions["s1"].info.State)
+	assert.Equal(t, []string{"stop:p1:1=Two reviewers are running."}, assistantTexts(r), "the turn's reply is still reported")
+
+	// The agent's report starts the next turn, which ends with nothing running.
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p2", "prompt": handback})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "Both found nothing.", "background_tasks": []any{}})
+	assert.Equal(t, []string{"work:p1=working", "work:p2=working", "sleep:p2:1=sleeping"}, stateChanges(r))
+}
+
+func TestStop_OnlyShellsAndMonitorsRunningIsDone(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "start the dev server"})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "background_tasks": tasksRunning("shell", "monitor")})
+	assert.Equal(t, []string{"work:p1=working", "sleep:p1:1=sleeping"}, stateChanges(r), "a dev server can run for good")
+}
+
+func TestStop_WhileWaitingWithAWorkflowRunningGoesOnWorking(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "clean up"})
+	hook(t, p, map[string]any{"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": rmBuild})
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "background_tasks": tasksRunning("workflow")})
+	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
+}
+
 func TestReconcile_WaitingIsNeedsInputWhenHooksAreStale(t *testing.T) {
 	p, r, c := newTestProvider(t)
 	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
