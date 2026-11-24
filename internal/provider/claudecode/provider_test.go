@@ -480,7 +480,7 @@ func TestWait_QuestionEndsAtItsAnswer(t *testing.T) {
 
 // askID is the id a question with this tool and input is reported under in turn p1.
 func askID(tool string, input map[string]any) string {
-	return "ask:p1:" + fingerprint(hookInput{ToolName: tool, ToolInput: input})[:16]
+	return "ask:p1:" + printFor(tool, input)
 }
 
 func TestAsk_ShownOnceAsTheAgentsMessageBeforeItsWait(t *testing.T) {

@@ -151,7 +151,9 @@ func (c *Client) PushEvents(ctx context.Context, params *room.PushSessionEventsR
 
 func (c *Client) ListPendingCommands(ctx context.Context) (*room.ListPendingCommandsResponseData, error) {
 	var out room.ListPendingCommandsResponseData
-	err := c.call(ctx, "/connector/commands", &room.ListPendingCommandsRequest{Version: version()}, &out)
+	// This roomd delivers answers too; older ones are never sent any.
+	params := &room.ListPendingCommandsRequestParams{IncludeAnswers: ptr(true)}
+	err := c.call(ctx, "/connector/commands", &room.ListPendingCommandsRequest{Version: version(), Params: params}, &out)
 	return &out, err
 }
 

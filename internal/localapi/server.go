@@ -2,8 +2,12 @@
 // agents' hooks and in-session scripts reach their provider through it:
 //
 //	POST /v1/providers/{name}/hook           a hook's JSON; the reply goes back to the hook
-//	GET  /v1/providers/{name}/inbox?session= messages queued for an in-session script
+//	GET  /v1/providers/{name}/inbox?session=[&caps=answer]
+//	                                         messages queued for an in-session script
+//	                                         (caps=answer: it takes answers from Room)
 //	POST /v1/providers/{name}/inbox/return   a message the script could not submit
+//	POST /v1/providers/{name}/answer/wait    held until Room answers the question the
+//	                                         body names (a long poll); the reply goes back verbatim
 //	GET  /v1/status                          roomd's health, for `roomd status`
 //	POST /v1/screen/setup                    ask macOS for the screen view's permissions (`roomd screen setup`)
 //	POST /v1/screen/stop                     end the running screen view (`roomd screen stop`)
@@ -23,6 +27,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/stonksfi/room-connector/internal/core"
@@ -60,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/providers/{name}/hook", s.hook)
 	mux.HandleFunc("GET /v1/providers/{name}/inbox", s.inbox)
 	mux.HandleFunc("POST /v1/providers/{name}/inbox/return", s.inboxReturn)
+	mux.HandleFunc("POST /v1/providers/{name}/answer/wait", s.answerWait)
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.status())
 	})
@@ -106,20 +113,35 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	relay(w, r, "hook", recv.HandleHook)
+}
+
+func (s *Server) answerWait(w http.ResponseWriter, r *http.Request) {
+	srv, ok := s.providers[r.PathValue("name")].(core.AnswerServer)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	relay(w, r, "answer wait", srv.WaitAnswer)
+}
+
+// relay hands a request's body (a hook's JSON: tool inputs, plans included,
+// can be large) to the provider and its reply back verbatim.
+func relay(w http.ResponseWriter, r *http.Request, what string, handle func(context.Context, []byte) ([]byte, error)) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBody))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	reply, err := recv.HandleHook(r.Context(), body)
+	reply, err := handle(r.Context(), body)
 	if err != nil {
-		log.Printf("%s hook: %v", r.PathValue("name"), err)
+		log.Printf("%s %s: %v", r.PathValue("name"), what, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(reply); err != nil {
-		log.Printf("%s hook: write reply: %v", r.PathValue("name"), err)
+		log.Printf("%s %s: write reply: %v", r.PathValue("name"), what, err)
 	}
 }
 
@@ -133,6 +155,9 @@ func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 	if session == "" {
 		http.Error(w, "session is required", http.StatusBadRequest)
 		return
+	}
+	if ans, ok := srv.(core.AnswerServer); ok && slices.Contains(strings.Split(r.URL.Query().Get("caps"), ","), "answer") {
+		ans.CanAnswer(session)
 	}
 	writeJSON(w, map[string]any{"messages": srv.TakeInbox(session)})
 }
@@ -195,7 +220,10 @@ func Listen(path string) (net.Listener, error) {
 
 // Serve runs the API on ln until ctx ends.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	// BaseContext: requests end with roomd, so a held answer wait never
+	// outlasts a shutdown.
+	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() {
 		<-ctx.Done()
 		// ctx is done: shutting down needs a fresh, short deadline of its own.

@@ -441,7 +441,7 @@ func (u *Uplink) onStreamEvent(ctx context.Context, event string, data []byte) {
 		u.pendingRefresh = true
 		u.mu.Unlock()
 		u.poke()
-	case "command":
+	case "command", "answer": // an ANSWER command only ever comes as "answer"
 		var c entities.Command
 		if err := json.Unmarshal(data, &c); err != nil {
 			log.Printf("decode command event: %v", err)
@@ -547,10 +547,37 @@ func (u *Uplink) dispatch(ctx context.Context, c *entities.Command) {
 		u.Settle(id, fmt.Errorf("this machine runs no %q provider", c.GetProvider()))
 		return
 	}
-	cmd := core.Command{ID: id, Provider: c.GetProvider(), ProviderSessionID: c.GetProviderSessionId(), Text: c.GetText()}
+	cmd, err := toCommand(c)
+	if err != nil {
+		u.Settle(id, err)
+		return
+	}
 	if err := p.Deliver(ctx, c.GetProviderSessionId(), cmd); err != nil {
 		u.Settle(id, err)
 	}
+}
+
+// toCommand reads a command of a kind this roomd delivers. Any other kind
+// fails rather than reach the agent as a prompt.
+func toCommand(c *entities.Command) (core.Command, error) {
+	cmd := core.Command{ID: c.GetId(), Provider: c.GetProvider(), ProviderSessionID: c.GetProviderSessionId(), Text: c.GetText()}
+	switch c.GetKind() {
+	case entities.CommandKind_SEND_MESSAGE:
+		cmd.Kind = core.CommandMessage
+	case entities.CommandKind_ANSWER:
+		a := c.GetAnswer()
+		if a.GetAskClientId() == "" {
+			return cmd, errors.New("the answer names no question")
+		}
+		cmd.Kind = core.CommandAnswer
+		cmd.Answer = &core.Answer{AskID: a.GetAskClientId(), Feedback: a.GetFeedback()}
+		for _, q := range a.GetQuestions() {
+			cmd.Answer.Questions = append(cmd.Answer.Questions, core.QuestionAnswer{Labels: q.GetLabels(), Text: q.GetText()})
+		}
+	default:
+		return cmd, fmt.Errorf("this roomd cannot deliver a %s command: update it with `npm i -g @stonksfi/roomd@latest && roomd install`", c.GetKind())
+	}
+	return cmd, nil
 }
 
 func toScreenOffer(o *entities.ScreenOffer) core.ScreenOffer {
@@ -621,9 +648,38 @@ func toEventInput(e core.Event) *entities.SessionEventInput {
 	if e.CommandID != 0 {
 		out.CommandId = &e.CommandID
 	}
+	if e.Ask != nil && e.Ask.FitsRoom() { // room-be would refuse the whole event
+		out.Ask = toAsk(e.Ask)
+	}
 	if !e.OccurredAt.IsZero() {
 		v := e.OccurredAt.Unix()
 		out.OccurredAt = &v
+	}
+	return out
+}
+
+func toAsk(a *core.Ask) *entities.Ask {
+	kind := entities.AskKind_ASK_QUESTION
+	if a.Kind == core.AskKindPlan {
+		kind = entities.AskKind_ASK_PLAN
+	}
+	out := &entities.Ask{Kind: &kind}
+	for _, q := range a.Questions {
+		aq := &entities.AskQuestion{Question: ptr(q.Question)}
+		if q.Header != "" {
+			aq.Header = ptr(q.Header)
+		}
+		if q.MultiSelect {
+			aq.MultiSelect = ptr(true)
+		}
+		for _, o := range q.Options {
+			ao := &entities.AskOption{Label: ptr(o.Label)}
+			if o.Description != "" {
+				ao.Description = ptr(o.Description)
+			}
+			aq.Options = append(aq.Options, ao)
+		}
+		out.Questions = append(out.Questions, aq)
 	}
 	return out
 }
@@ -655,3 +711,5 @@ func toKind(k core.EventKind) entities.SessionEventKind {
 		return entities.SessionEventKind_USER_MESSAGE
 	}
 }
+
+func ptr[T any](v T) *T { return &v }

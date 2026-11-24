@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/stonksfi/room-connector/internal/core"
 )
 
 // asks is an AskUserQuestion's input as decoded from the hook's JSON.
@@ -51,5 +53,31 @@ func TestDescribeAsk(t *testing.T) {
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, describeAsk(tc.tool, tc.input), tc.name)
+	}
+}
+
+func TestBuildAsk(t *testing.T) {
+	got := buildAsk("AskUserQuestion", asks(question("Which db?", true, option("Postgres", "Relational"), option("SQLite", ""))))
+	assert.Equal(t, &core.Ask{Kind: core.AskKindQuestion, Questions: []core.AskQuestion{{
+		Question: "Which db?", Header: "Chip", MultiSelect: true,
+		Options: []core.AskOption{{Label: "Postgres", Description: "Relational"}, {Label: "SQLite"}},
+	}}}, got, "previews are left out")
+
+	assert.Equal(t, &core.Ask{Kind: core.AskKindPlan}, buildAsk("ExitPlanMode", map[string]any{"plan": "# P"}))
+
+	text := question("Name it?", false)
+	text["kind"] = "text"
+	many := make([]map[string]any, core.MaxAskOptions+1)
+	for i := range many {
+		many[i] = option(string(rune('a'+i)), "")
+	}
+	for name, input := range map[string]map[string]any{
+		"a text question":     asks(text),
+		"a repeated question": asks(question("A?", false, option("x", "")), question("A?", false, option("y", ""))),
+		"too many options":    asks(question("A?", false, many...)),
+		"no options":          asks(question("A?", false)),
+		"no questions":        {},
+	} {
+		assert.Nil(t, buildAsk("AskUserQuestion", input), name)
 	}
 }

@@ -36,6 +36,8 @@ func (p *Provider) onToolStart(s *session, in hookInput, now time.Time) {
 		if isNew {
 			// Answering a question changes its input: keep it by id.
 			s.tools = remember(s.tools, toolCall{id: in.ToolUseID, fingerprint: fp})
+			// A new call asks again, even what this turn already answered.
+			s.closedAsks = slices.DeleteFunc(s.closedAsks, func(c string) bool { return c == printOf(fp) })
 		}
 		p.ask(s, in, fp, now)
 		p.wait(s, fp, in.ToolName, now)
@@ -55,6 +57,11 @@ func (p *Provider) onToolStart(s *session, in hookInput, now time.Time) {
 // onToolEnd ends a wait on the tool that just finished, matched by its input
 // or, for a question, by the id its PreToolUse had.
 func (p *Provider) onToolEnd(s *session, in hookInput, now time.Time) {
+	if in.HookEventName == "PostToolUse" && asksPerson[in.ToolName] {
+		// First: the tool ran, so its answers' fate is the tool's, not that
+		// of Claude going on (which resume below would close the wait as).
+		p.answerUsed(s, in, now)
+	}
 	if s.info.State != core.StateNeedsInput || s.waitTool == "" {
 		return
 	}
@@ -75,6 +82,9 @@ func (s *session) startedTool(id string) int {
 func (p *Provider) wait(s *session, tool, toolName string, now time.Time) {
 	if s.stopped || s.info.State == core.StateSleeping {
 		return // between turns, or a late hook of a finished one
+	}
+	if tool != "" && slices.Contains(s.closedAsks, printOf(tool)) {
+		return // a late hook of a question already answered
 	}
 	if s.info.State == core.StateNeedsInput {
 		if tool != "" {
@@ -102,13 +112,24 @@ func (p *Provider) changeState(s *session, state core.State, toolName string, no
 		prefix = "wait:"
 	}
 	s.changes++
-	s.info.State = state
+	p.enterState(s, state, now)
 	p.emit(s, core.Event{
 		ClientEventID: prefix + s.promptID + ":" + strconv.Itoa(s.changes),
 		Kind:          core.KindStateChange,
 		State:         state,
 		ToolName:      toolName,
 	}, now)
+}
+
+// enterState moves the session to state. Every change of state goes through
+// here, so leaving a wait always ends it (closeWait) and forgets the tool it
+// asked about.
+func (p *Provider) enterState(s *session, state core.State, now time.Time) {
+	if s.info.State == core.StateNeedsInput && state != core.StateNeedsInput {
+		p.closeWait(s, now)
+		s.waitTool = ""
+	}
+	s.info.State = state
 }
 
 // fingerprint identifies a tool call by its name and input, so the

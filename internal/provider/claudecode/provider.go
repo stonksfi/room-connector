@@ -1,7 +1,8 @@
 // Package claudecode is Room's provider for Claude Code. State and
 // conversation come from the Room plugin's hooks; messages from the app reach
 // a session through the plugin's in-session script, which polls this
-// provider's inbox and submits them as the person's own prompt.
+// provider's inbox and submits them as the person's own prompt, and answers
+// to the session's questions through the same script's wait (answers.go).
 package claudecode
 
 import (
@@ -82,6 +83,12 @@ type session struct {
 	closed   []string // message ids already reported, newest last
 	inbox    []queued // waiting for the in-session script
 	handed   []queued // taken, waiting to be seen running
+	// Answers from Room (answers.go).
+	takesAnswers bool                  // its script said so on its last poll
+	answers      []pendingAnswer       // queued or handed over
+	waits        map[string]*waitState // the script's waits, by question print
+	closedAsks   []string              // prints whose question closed this turn
+	wake         chan struct{}         // closed to wake the waits
 }
 
 // toolCall is one tool use a turn started; fingerprint is kept for a
@@ -111,6 +118,7 @@ type Provider struct {
 	claudePath string
 	now        func() time.Time
 	listLive   func(ctx context.Context) ([]liveSession, error)
+	answerHold time.Duration
 
 	mu       sync.Mutex
 	sink     core.Sink
@@ -122,6 +130,7 @@ var (
 	_ core.Provider     = (*Provider)(nil)
 	_ core.HookReceiver = (*Provider)(nil)
 	_ core.InboxServer  = (*Provider)(nil)
+	_ core.AnswerServer = (*Provider)(nil)
 )
 
 // New returns the provider. claudePath is the claude binary used to list live
@@ -131,6 +140,7 @@ func New(claudePath string) *Provider {
 		claudePath: claudePath,
 		now:        time.Now,
 		sessions:   map[string]*session{},
+		answerHold: answerHold,
 	}
 	p.listLive = p.listWithCLI
 	return p
@@ -163,11 +173,15 @@ func (p *Provider) Start(ctx context.Context, sink core.Sink) error {
 	}
 }
 
-// Deliver queues a message for the session's in-session script.
+// Deliver queues a message for the session's in-session script, or an answer
+// for the wait on its question.
 func (p *Provider) Deliver(ctx context.Context, providerSessionID string, cmd core.Command) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.get(providerSessionID)
+	if cmd.Kind == core.CommandAnswer {
+		return p.deliverAnswer(s, cmd, p.now())
+	}
 	s.inbox = append(s.inbox, queued{cmd: cmd, at: p.now()})
 	return nil
 }
@@ -221,6 +235,7 @@ func (p *Provider) get(id string) *session {
 				LastActivityAt:    now,
 			},
 			drafts: map[string]*draft{},
+			waits:  map[string]*waitState{},
 		}
 		p.sessions[id] = s
 	}
@@ -237,6 +252,11 @@ func (p *Provider) forget(id string) {
 	for _, q := range append(s.inbox, s.handed...) {
 		p.sink.Settle(q.cmd.ID, errEnded)
 	}
+	for _, a := range s.answers {
+		p.sink.Settle(a.cmd.ID, errEnded)
+	}
+	s.answers = nil
+	s.wakeWaits() // its waits see the session gone and end
 	delete(p.sessions, id)
 }
 
@@ -249,6 +269,7 @@ func (p *Provider) expire() {
 	}
 	now := p.now()
 	for _, s := range p.sessions {
+		p.expireAnswers(s, now)
 		if s.info.State == core.StateWorking {
 			continue // a turn is running: its end (or Stop hook) still delivers
 		}

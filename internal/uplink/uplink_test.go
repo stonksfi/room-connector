@@ -185,12 +185,52 @@ func TestDispatch_RoutesPendingCommandsOnce(t *testing.T) {
 	u.onStreamEvent(context.Background(), "command", []byte(cmd))
 	u.onStreamEvent(context.Background(), "command", []byte(`{"id":10,"status":1,"provider":"claude_code"}`))
 	require.Len(t, cc.delivered, 1)
-	assert.Equal(t, core.Command{ID: 9, Provider: "claude_code", ProviderSessionID: "s1", Text: "hi"}, cc.delivered[0])
+	assert.Equal(t, core.Command{ID: 9, Kind: core.CommandMessage, Provider: "claude_code", ProviderSessionID: "s1", Text: "hi"}, cc.delivered[0])
 
 	u.onStreamEvent(context.Background(), "command", []byte(`{"id":11,"status":0,"provider":"codex"}`))
 	settles := u.commands.Settles()
 	require.Len(t, settles, 1)
 	assert.Contains(t, settles[0].Failure, "codex")
+}
+
+func TestDispatch_Answers(t *testing.T) {
+	cc := &fakeProvider{name: "claude_code"}
+	u, room := newTestUplink(t, "rmd_test", cc)
+	ans := `{"id":12,"kind":1,"status":0,"text":"Postgres","provider":"claude_code","provider_session_id":"s1",
+		"answer":{"event_id":5,"ask_client_id":"ask:p1:abc","questions":[{"labels":["Postgres"]},{"text":"typed"}],"feedback":""}}`
+	u.onStreamEvent(context.Background(), "answer", []byte(ans))
+	require.Len(t, cc.delivered, 1)
+	assert.Equal(t, core.Command{ID: 12, Kind: core.CommandAnswer, Provider: "claude_code", ProviderSessionID: "s1", Text: "Postgres",
+		Answer: &core.Answer{AskID: "ask:p1:abc", Questions: []core.QuestionAnswer{{Labels: []string{"Postgres"}}, {Text: "typed"}}}}, cc.delivered[0])
+
+	// Never handed over as a prompt: an answer naming no question, or a kind this roomd doesn't know.
+	u.onStreamEvent(context.Background(), "answer", []byte(`{"id":13,"kind":1,"status":0,"text":"x","provider":"claude_code"}`))
+	u.onStreamEvent(context.Background(), "command", []byte(`{"id":14,"kind":7,"status":0,"text":"x","provider":"claude_code"}`))
+	assert.Len(t, cc.delivered, 1)
+	settles := u.commands.Settles()
+	require.Len(t, settles, 2)
+	assert.Contains(t, settles[0].Failure, "no question")
+	assert.Contains(t, settles[1].Failure, "update it")
+
+	// Pending answers are asked for, so they are listed after a reconnect.
+	u.onStreamEvent(context.Background(), "ready", nil)
+	require.NoError(t, u.flush(context.Background()))
+	calls := room.calls("/api/v1/connector/commands")
+	require.NotEmpty(t, calls)
+	assert.Equal(t, map[string]any{"include_answers": true}, calls[len(calls)-1]["params"])
+}
+
+func TestToEventInput_CarriesTheAsk(t *testing.T) {
+	in := toEventInput(core.Event{ClientEventID: "ask:p1:abc", Kind: core.KindAssistantMessage, Text: "Which db?", Ask: &core.Ask{
+		Kind: core.AskKindQuestion, Questions: []core.AskQuestion{{Question: "Which db?", MultiSelect: true, Options: []core.AskOption{{Label: "Postgres", Description: "SQL"}, {Label: "SQLite"}}}},
+	}})
+	raw, err := json.Marshal(in.GetAsk())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"kind":0,"questions":[{"question":"Which db?","multi_select":true,"options":[{"label":"Postgres","description":"SQL"},{"label":"SQLite"}]}]}`, string(raw))
+	assert.Equal(t, "ASK_PLAN", toEventInput(core.Event{Kind: core.KindAssistantMessage, Ask: &core.Ask{Kind: core.AskKindPlan}}).GetAsk().GetKind().String())
+	assert.Nil(t, toEventInput(core.Event{Kind: core.KindAssistantMessage}).Ask)
+	assert.Nil(t, toEventInput(core.Event{Kind: core.KindAssistantMessage, Ask: &core.Ask{Kind: core.AskKindQuestion}}).Ask,
+		"an ask room-be would refuse is left off, so the message still lands")
 }
 
 func TestFlush_DropsWhatRoomPermanentlyRefuses(t *testing.T) {
@@ -293,8 +333,6 @@ func TestReady_ListsPendingAtTheNextFlushUntilItWorks(t *testing.T) {
 	require.NoError(t, u.flush(context.Background()))
 	assert.Len(t, cc.delivered, 1, "listed once")
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestReadEvents(t *testing.T) {
 	body := "event: ready\ndata: {}\n\n: comment\nevent: command\ndata: {\"id\":1}\n\nevent: x\ndata: a\ndata: b\n\n"

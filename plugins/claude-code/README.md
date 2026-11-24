@@ -20,11 +20,14 @@ What it does:
 - An in-session script (`hooks/register.ts`) polls `roomd` for messages sent
   from the app and submits them as your prompt, so an idle session wakes up and
   a busy one runs the message right after its current turn.
+- While Claude asks you a question or shows you a plan, the script waits beside
+  the dialog for an answer from the app: tap an option there (or keep planning
+  with feedback) and it answers the dialog. Whichever answer comes first, here
+  or in the app, wins. Approving a plan stays at your Mac.
 - When in-session scripts are turned off, the Stop hook hands a waiting message
   to Claude at the end of a turn instead.
 
 What leaves your machine: your prompts, Claude's replies, the questions it asks
 you and the plans it proposes, one-line summaries of tool calls, and each
-session's folder, name and state. Messages are only
-accepted for sessions on this machine, from the Room account the machine was
-linked to.
+session's folder, name and state. Messages and answers are only accepted for
+sessions on this machine, from the Room account the machine was linked to.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type hookInput struct {
 	SessionID            string         `json:"session_id"`
 	Cwd                  string         `json:"cwd"`
 	PromptID             string         `json:"prompt_id"`
+	AgentID              string         `json:"agent_id"` // set when a subagent's loop fired the hook
 	SessionTitle         string         `json:"session_title"`
 	Source               string         `json:"source"`
 	Prompt               string         `json:"prompt"`
@@ -77,7 +79,7 @@ func (p *Provider) HandleHook(ctx context.Context, body []byte) ([]byte, error) 
 	case "SessionStart":
 		// Compaction restarts the session mid-turn; only a real start is idle.
 		if in.Source != "compact" {
-			s.info.State = core.StateSleeping
+			p.enterState(s, core.StateSleeping, now)
 		}
 		p.sink.UpsertSession(s.info)
 	case "UserPromptSubmit":
@@ -129,6 +131,8 @@ func (p *Provider) onPrompt(s *session, in hookInput, now time.Time) {
 	s.stops = 0
 	s.changes = 0
 	s.tools = nil
+	s.closedAsks = nil
+	maps.DeleteFunc(s.waits, func(_ string, w *waitState) bool { return w.open == 0 })
 	s.assistantSent = false
 	s.stopped = false
 	ev := core.Event{
@@ -252,7 +256,7 @@ func (p *Provider) emitAssistant(s *session, clientID, text string, now time.Tim
 }
 
 func (p *Provider) setState(s *session, state core.State, clientID string, now time.Time) {
-	s.info.State = state
+	p.enterState(s, state, now)
 	p.emit(s, core.Event{ClientEventID: clientID, Kind: core.KindStateChange, State: state}, now)
 }
 

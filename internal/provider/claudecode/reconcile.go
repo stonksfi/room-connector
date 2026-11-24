@@ -119,7 +119,8 @@ func (p *Provider) reconcile(ctx context.Context) {
 		// Hooks are exact while fresh; `claude agents` catches what they miss.
 		if st := stateOf(l.Status); now.Sub(s.lastHookAt) > hookFresh && st != s.info.State {
 			// A wait the hooks saw is over, or one they missed began.
-			s.info.State, s.waitTool = st, ""
+			p.enterState(s, st, now)
+			s.waitTool = ""
 		}
 		snapshot = append(snapshot, s.info)
 	}

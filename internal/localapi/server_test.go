@@ -18,7 +18,7 @@ import (
 	"github.com/stonksfi/room-connector/internal/core"
 )
 
-type fakeProvider struct{ lastHook, returned string }
+type fakeProvider struct{ lastHook, returned, canAnswer, waited string }
 
 func (p *fakeProvider) Name() string                                        { return "fake" }
 func (p *fakeProvider) Start(context.Context, core.Sink) error              { return nil }
@@ -32,6 +32,14 @@ func (p *fakeProvider) TakeInbox(id string) []core.InboxMessage {
 }
 func (p *fakeProvider) ReturnInbox(id string, commandID int64, reason string) {
 	p.returned = fmt.Sprintf("%s/%d/%s", id, commandID, reason)
+}
+func (p *fakeProvider) CanAnswer(id string) { p.canAnswer = id }
+func (p *fakeProvider) WaitAnswer(_ context.Context, b []byte) ([]byte, error) {
+	if string(b) == "bad" {
+		return nil, fmt.Errorf("refused")
+	}
+	p.waited = string(b)
+	return []byte(`{"closed":true}`), nil
 }
 
 func TestRoutes(t *testing.T) {
@@ -49,6 +57,20 @@ func TestRoutes(t *testing.T) {
 	require.NoError(t, err)
 	body, _ = io.ReadAll(resp.Body)
 	assert.JSONEq(t, `{"messages":[{"command_id":1,"text":"for s1"}]}`, string(body))
+
+	assert.Empty(t, p.canAnswer, "a script that did not say it takes answers")
+	_, err = http.Get(srv.URL + "/v1/providers/fake/inbox?session=s2&caps=other,answer")
+	require.NoError(t, err)
+	assert.Equal(t, "s2", p.canAnswer)
+
+	resp, err = http.Post(srv.URL+"/v1/providers/fake/answer/wait", "application/json", strings.NewReader(`{"session":"s1"}`))
+	require.NoError(t, err)
+	body, _ = io.ReadAll(resp.Body)
+	assert.Equal(t, `{"closed":true}`, string(body))
+	assert.Equal(t, `{"session":"s1"}`, p.waited)
+	resp, err = http.Post(srv.URL+"/v1/providers/fake/answer/wait", "application/json", strings.NewReader(`bad`))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
 	resp, err = http.Get(srv.URL + "/v1/providers/fake/inbox")
 	require.NoError(t, err)
