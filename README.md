@@ -38,10 +38,12 @@ roomd screen setup  # asks macOS for Screen Recording and Accessibility for room
 roomd screen stop   # end a view from the Mac (or use Stop viewing in the menu bar)
 ```
 
-Go binaries are ad-hoc signed, so macOS forgets those permissions whenever roomd
-is reinstalled: run `roomd screen setup` again, or install with
-`ROOM_CODESIGN_IDENTITY="<your signing identity>" make install` (see
-`security find-identity -p codesigning`) so the grants stick.
+macOS keeps those permissions across reinstalls only for a signed roomd.
+`make install` signs with the first code signing identity in your keychain
+(`security find-identity -p codesigning -v`), or the one
+`ROOM_CODESIGN_IDENTITY` names. With none (or `ROOM_CODESIGN_IDENTITY=`) the
+binaries are ad-hoc signed, and you run `roomd screen setup` again after each
+install.
 
 Everything lives in `~/.room`: the binaries (`roomd`, `roomd-screen`), config, the offline event queue,
 the local socket the plugin talks to, and `roomd.log`. The device token is in
@@ -54,5 +56,5 @@ the macOS keychain (`room-connector`). `roomd uninstall --purge` removes it all.
 into `dist/`; `make npm-publish V=0.1.0` publishes them (`npm login` first, as a
 member of the `stonksfi` npm org). The main package, `@stonksfi/roomd`, is a
 small Node shim that runs the binary from `@stonksfi/roomd-darwin-arm64` or
-`-x64`, whichever npm installed. Set `ROOM_CODESIGN_IDENTITY` while releasing so
+`-x64`, whichever npm installed. Releases are signed like `make install`, so
 installs keep their screen permissions across upgrades.

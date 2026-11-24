@@ -2,6 +2,15 @@
 IDL_PATH=$(shell pwd)/../http_idl
 IDL=$(IDL_PATH)/room/room.proto
 
+# The identity `roomd install` and the npm release sign roomd and roomd-screen
+# with, so macOS keeps their screen permissions across rebuilds: the first code
+# signing identity in this Mac's keychain unless ROOM_CODESIGN_IDENTITY names
+# one. Set it empty to sign ad hoc (the permissions then reset on each install).
+ifeq ($(origin ROOM_CODESIGN_IDENTITY),undefined)
+ROOM_CODESIGN_IDENTITY := $(shell security find-identity -p codesigning -v 2>/dev/null | awk -F'"' 'NF > 2 { print $$2; exit }')
+endif
+export ROOM_CODESIGN_IDENTITY
+
 # Build roomd and its screen helper, roomd-screen (cgo; macOS), into ./bin.
 build:
 	go build -o bin/roomd ./cmd/roomd
@@ -16,9 +25,7 @@ test:
 update-idl:
 	hz model -proto_path $(IDL_PATH) -idl $(IDL) -module github.com/stonksfi/room-connector --model_dir internal/model
 
-# Build, then install the daemon (launchd) and the Claude Code plugin. Set
-# ROOM_CODESIGN_IDENTITY to a signing identity so macOS keeps the screen
-# permissions across reinstalls.
+# Build, then install the daemon (launchd) and the Claude Code plugin.
 install: build
 	./bin/roomd install
 
