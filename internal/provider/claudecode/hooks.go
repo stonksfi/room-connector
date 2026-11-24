@@ -83,17 +83,24 @@ func (p *Provider) HandleHook(ctx context.Context, body []byte) ([]byte, error) 
 	case "UserPromptSubmit":
 		p.onPrompt(s, in, now)
 	case "PreToolUse":
-		p.emit(s, core.Event{
-			ClientEventID: "tool:" + in.ToolUseID,
-			Kind:          core.KindToolActivity,
-			ToolName:      in.ToolName,
-			Text:          summarizeTool(in.ToolName, in.ToolInput),
-		}, now)
+		// A question is shown as itself (onToolStart), not as a tool line.
+		if !asksPerson[in.ToolName] {
+			p.emit(s, core.Event{
+				ClientEventID: "tool:" + in.ToolUseID,
+				Kind:          core.KindToolActivity,
+				ToolName:      in.ToolName,
+				Text:          summarizeTool(in.ToolName, in.ToolInput),
+			}, now)
+		}
 		p.onToolStart(s, in, now)
 	case "PostToolUse", "PostToolUseFailure":
 		p.onToolEnd(s, in, now)
 	case "PermissionRequest":
-		p.wait(s, fingerprint(in), in.ToolName, now)
+		fp := fingerprint(in)
+		if asksPerson[in.ToolName] {
+			p.ask(s, in, fp, now) // it can overtake the call's PreToolUse
+		}
+		p.wait(s, fp, in.ToolName, now)
 	case "Elicitation":
 		p.wait(s, "", "", now)
 	case "ElicitationResult":
@@ -284,5 +291,5 @@ func summarizeTool(tool string, input map[string]any) string {
 	default:
 		s = pick("description", "command", "file_path", "query", "url", "pattern")
 	}
-	return core.Truncate(strings.Join(strings.Fields(s), " "), maxToolSummary)
+	return core.Truncate(oneLine(s), maxToolSummary)
 }

@@ -478,6 +478,59 @@ func TestWait_QuestionEndsAtItsAnswer(t *testing.T) {
 	assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input", "work:p1:2=working"}, stateChanges(r))
 }
 
+// askID is the id a question with this tool and input is reported under in turn p1.
+func askID(tool string, input map[string]any) string {
+	return "ask:p1:" + fingerprint(hookInput{ToolName: tool, ToolInput: input})[:16]
+}
+
+func TestAsk_ShownOnceAsTheAgentsMessageBeforeItsWait(t *testing.T) {
+	cases := []struct {
+		name, tool string
+		input      map[string]any
+		order      []string // the hooks of the one call, in arrival order
+		want       string
+	}{
+		{"question", "AskUserQuestion", asks(question("Which db?", false, option("Postgres", "Relational"))),
+			[]string{"PreToolUse", "PermissionRequest"}, "Which db?\n\n- **Postgres** — Relational"},
+		{"plan whose permission overtakes", "ExitPlanMode", map[string]any{"plan": "# Plan\n\n1. Do it"},
+			[]string{"PermissionRequest", "PreToolUse"}, "# Plan\n\n1. Do it"},
+	}
+	for _, tc := range cases {
+		p, r, _ := newTestProvider(t)
+		hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "go"})
+		for _, name := range tc.order {
+			hook(t, p, map[string]any{"hook_event_name": name, "tool_name": tc.tool, "tool_use_id": "t1", "tool_input": tc.input})
+		}
+		// No tool row: the question, once, then the wait that names it.
+		assert.Equal(t, []core.EventKind{core.KindUserMessage, core.KindStateChange, core.KindAssistantMessage, core.KindStateChange}, r.kinds(), tc.name)
+		assert.Equal(t, []string{askID(tc.tool, tc.input) + "=" + tc.want}, assistantTexts(r), tc.name)
+		assert.Equal(t, []string{"work:p1=working", "wait:p1:1=needs_input"}, stateChanges(r), tc.name)
+		assert.Equal(t, tc.tool, r.events[3].ToolName, tc.name)
+	}
+}
+
+func TestAsk_TheTurnsReplyIsStillReportedAtStop(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	plan := map[string]any{"plan": "# Plan"}
+	hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": "p1", "prompt": "plan it"})
+	hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode", "tool_use_id": "x1", "tool_input": plan})
+	hook(t, p, map[string]any{"hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode", "tool_use_id": "x1", "tool_input": plan})
+	// No chunks arrived: the Stop's own text is the reply.
+	hook(t, p, map[string]any{"hook_event_name": "Stop", "last_assistant_message": "Done."})
+	assert.Equal(t, []string{askID("ExitPlanMode", plan) + "=# Plan", "stop:p1:1=Done."}, assistantTexts(r))
+}
+
+func TestAsk_TheSameQuestionInALaterTurnShowsAgain(t *testing.T) {
+	p, r, _ := newTestProvider(t)
+	q := asks(question("Ship it?", false))
+	for _, prompt := range []string{"p1", "p2"} {
+		hook(t, p, map[string]any{"hook_event_name": "UserPromptSubmit", "prompt_id": prompt, "prompt": "go"})
+		hook(t, p, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_use_id": "q" + prompt, "tool_input": q})
+	}
+	first := askID("AskUserQuestion", q)
+	assert.Equal(t, []string{first + "=Ship it?", strings.Replace(first, "p1", "p2", 1) + "=Ship it?"}, assistantTexts(r))
+}
+
 func TestWait_TheNewestPromptIsTheOneOpen(t *testing.T) {
 	p, r, _ := newTestProvider(t)
 	ls := map[string]any{"command": "ls build"}

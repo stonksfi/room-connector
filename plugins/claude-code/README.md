@@ -23,7 +23,8 @@ What it does:
 - When in-session scripts are turned off, the Stop hook hands a waiting message
   to Claude at the end of a turn instead.
 
-What leaves your machine: your prompts, Claude's replies, one-line summaries of
-tool calls, and each session's folder, name and state. Messages are only
+What leaves your machine: your prompts, Claude's replies, the questions it asks
+you and the plans it proposes, one-line summaries of tool calls, and each
+session's folder, name and state. Messages are only
 accepted for sessions on this machine, from the Room account the machine was
 linked to.

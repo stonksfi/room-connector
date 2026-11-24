@@ -37,6 +37,7 @@ func (p *Provider) onToolStart(s *session, in hookInput, now time.Time) {
 			// Answering a question changes its input: keep it by id.
 			s.tools = remember(s.tools, toolCall{id: in.ToolUseID, fingerprint: fp})
 		}
+		p.ask(s, in, fp, now)
 		p.wait(s, fp, in.ToolName, now)
 		return
 	}
